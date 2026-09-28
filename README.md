@@ -9,7 +9,7 @@ Port and builds by **Alperen Yavuz**, based on the GPL-licensed upstream BRP4
 source and sharing its host-side pipeline (demodulation, harmonic summing,
 candidate ranking, BOINC integration) with the companion CUDA port,
 [brp4-cuda-port](https://github.com/alplix/brp4-cuda-port). Where the CUDA
-port targets every NVIDIA GPU since 2010 via the CUDA driver API, Juniper
+port targets every NVIDIA GPU the CUDA driver API, Juniper
 targets Apple's GPU stack directly: resampling, FFT, power spectrum and
 harmonic summing all run as native Metal compute kernels and an MPSGraph
 FFT, with no CPU fallback anywhere in the search pipeline itself.
