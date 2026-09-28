@@ -63,10 +63,9 @@
 
 #include "hs_common.h"
 
-// this port is CUDA-only: resampling, FFT and harmonic summing run on the device
-#include "cuda/app/cuda_utilities.h"
-#include "cuda/app/demod_binary_cuda.h"
-#include "cuda/app/demod_binary_hs_cuda.cuh"
+// this port is Metal-only: resampling, FFT and harmonic summing run on the device
+#include "metal/demod_binary_hs_metal.h"
+#include "metal/demod_binary_metal.h"
 
 #define TIME_FORMAT "%Y-%m-%dT%H:%M:%S+00:00"  // used for the result file header
 #define TIME_LENGTH 30                         // used for the result file header
@@ -156,7 +155,7 @@ int MAIN(int argc, char *argv[]) {
   BOINC_STATUS boinc_status;
 #endif
 
-  int coprocDeviceId = -1;      // CUDA device id
+  int coprocDeviceId = -1;      // Metal device id
   int coprocDeviceIdGiven = 0;  // Did we get a device ID via command line (bool)?
 
   // book-keeping
@@ -450,16 +449,16 @@ int MAIN(int argc, char *argv[]) {
 
 #ifdef BOINCIFIED
   boinc_begin_critical_section();
-  logMessage(debug, true, "Entered critical section: CUDA initialization\n");
+  logMessage(debug, true, "Entered critical section: Metal initialization\n");
 #endif
 
-  // set up CUDA device
-  result = initialize_cuda(coprocDeviceIdGiven, &coprocDeviceId);
+  // set up Metal device
+  result = initialize_metal(coprocDeviceIdGiven, &coprocDeviceId);
   if (result != 0) return result;
 
 #ifdef BOINCIFIED
   boinc_end_critical_section();
-  logMessage(debug, true, "Left critical section: CUDA initialization\n");
+  logMessage(debug, true, "Left critical section: Metal initialization\n");
 #endif
 
   // allocate memory for candidates array of structs
@@ -1111,14 +1110,14 @@ int MAIN(int argc, char *argv[]) {
 
 #ifdef BOINCIFIED
   boinc_begin_critical_section();
-  logMessage(debug, true, "Entered critical section: CUDA setup phase\n");
+  logMessage(debug, true, "Entered critical section: Metal setup phase\n");
 #endif
 
   result = set_up_resampling(t_series_dd, &t_series_resamp, &params, sinLUTsamples, cosLUTsamples);
   if (result != 0) return result;
 
 #ifndef NDEBUG
-  logMessage(debug, true, "CUDA global memory status (resampling set up):\n");
+  logMessage(debug, true, "Metal global memory status (resampling set up):\n");
   printDeviceGlobalMemStatus(debug, true);
 #endif
 
@@ -1127,7 +1126,7 @@ int MAIN(int argc, char *argv[]) {
   if (result != 0) return result;
 
 #ifndef NDEBUG
-  logMessage(debug, true, "CUDA global memory status (FFT/powerspectrum set up):\n");
+  logMessage(debug, true, "Metal global memory status (FFT/powerspectrum set up):\n");
   printDeviceGlobalMemStatus(debug, true);
 #endif
 
@@ -1137,13 +1136,13 @@ int MAIN(int argc, char *argv[]) {
   if (result != 0) return result;
 
 #ifndef NDEBUG
-  logMessage(debug, true, "CUDA global memory status (harmonic summing set up):\n");
+  logMessage(debug, true, "Metal global memory status (harmonic summing set up):\n");
   printDeviceGlobalMemStatus(debug, true);
 #endif
 
 #ifdef BOINCIFIED
   boinc_end_critical_section();
-  logMessage(debug, true, "Left critical section: CUDA setup phase\n");
+  logMessage(debug, true, "Left critical section: Metal setup phase\n");
 #endif
 
   // if in debug mode, drop information about thresholds
@@ -1163,10 +1162,8 @@ int MAIN(int argc, char *argv[]) {
     MAIN LOOP OVER THE TEMPLATE BANK
     --------------------------------*/
 
-#if defined(USE_CUDA)
-  logMessage(info, true, "CUDA global memory status (GPU setup complete):\n");
+  logMessage(info, true, "Metal global memory status (GPU setup complete):\n");
   printDeviceGlobalMemStatus(info, true);
-#endif
 
   dirty_page_count = 0;
 
@@ -1199,7 +1196,7 @@ int MAIN(int argc, char *argv[]) {
     Omega = 2.0 * M_PI / P;
 
 #ifndef NDEBUG
-    logMessage(debug, true, "CUDA global memory status (template iteration):\n");
+    logMessage(debug, true, "Metal global memory status (template iteration):\n");
     printDeviceGlobalMemStatus(debug, true);
 #endif
 
@@ -1220,7 +1217,7 @@ int MAIN(int argc, char *argv[]) {
 
 #ifdef BOINCIFIED
     boinc_begin_critical_section();
-    logMessage(debug, true, "Entered critical section: CUDA template iteration\n");
+    logMessage(debug, true, "Entered critical section: Metal template iteration\n");
 #endif
 
     result = run_resampling(t_series_dd, t_series_resamp, &params);
@@ -1273,7 +1270,7 @@ thrA[4] = 0.0;
 
 #ifdef BOINCIFIED
     boinc_end_critical_section();
-    logMessage(debug, true, "Left critical section: CUDA template iteration\n");
+    logMessage(debug, true, "Left critical section: Metal template iteration\n");
 #endif
 
     // allocate memory for downsampled power spectrum
@@ -1440,21 +1437,21 @@ thrA[4] = 0.0;
   if (result != 0) return result;
 
 #ifndef NDEBUG
-  logMessage(debug, true, "CUDA global memory status (all torn down):\n");
+  logMessage(debug, true, "Metal global memory status (all torn down):\n");
   printDeviceGlobalMemStatus(debug, true);
 #endif
 
 #ifdef BOINCIFIED
   boinc_begin_critical_section();
-  logMessage(debug, true, "Entered critical section: CUDA shutdown\n");
+  logMessage(debug, true, "Entered critical section: Metal shutdown\n");
 #endif
 
-  // free CUDA device
-  shutdown_cuda();
+  // free Metal device
+  shutdown_metal();
 
 #ifdef BOINCIFIED
   boinc_end_critical_section();
-  logMessage(debug, true, "Left critical section: CUDA shutdown\n");
+  logMessage(debug, true, "Left critical section: Metal shutdown\n");
 #endif
 
 #ifdef BOINCIFIED

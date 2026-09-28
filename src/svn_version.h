@@ -1,4 +1,4 @@
 #ifndef SVN_VERSION_H
 #define SVN_VERSION_H
-#define SVN_VERSION "BRP4 CUDA port v1.0 by Alperen Yavuz"
+#define SVN_VERSION "Juniper (BRP4 Metal port) by Alperen Yavuz"
 #endif

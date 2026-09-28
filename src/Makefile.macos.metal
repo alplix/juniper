@@ -1,6 +1,6 @@
 ###########################################################################
 #   Copyright (C) 2008-2023 by Oliver Behnke                              #
-#   oliver.behnke[AT]aei.mpg.de                                           #
+#   Copyright (C) 2026 by Alperen Yavuz (Metal-only rework for Juniper)   #
 #                                                                         #
 #   This file is part of Einstein@Home (Radio Pulsar Edition).            #
 #                                                                         #
@@ -17,66 +17,57 @@
 #   along with Einstein@Home. If not, see <http://www.gnu.org/licenses/>. #
 #                                                                         #
 ###########################################################################
-
+#
+# Prerequisites on the build Mac (Apple Silicon only):
+#   - full Xcode (not just Command Line Tools) for `xcrun metal`/`metallib`
+#   - GSL, FFTW (single precision), libxml2 dev headers+libs -- these are
+#     needed by the shared demod_binary.c/erp_boinc_ipc.cpp regardless of
+#     GPU backend (statistics + BOINC screensaver IPC), not by the Metal
+#     kernels themselves. Point EINSTEIN_RADIO_INSTALL at wherever these
+#     (and BOINC's own dev libraries, which still need to be built from
+#     https://github.com/BOINC/boinc source -- no Homebrew formula ships
+#     them) are installed, e.g. a Homebrew prefix plus a manual BOINC build.
+#
 # path settings
 EINSTEIN_RADIO_SRC?=$(PWD)
 EINSTEIN_RADIO_INSTALL?=$(PWD)
-PKG_CONFIG_PATH=$(EINSTEIN_RADIO_INSTALL)/lib/pkgconfig
+METAL_CPP_DIR?=$(EINSTEIN_RADIO_SRC)/../third_party/metal-cpp
 
 # config values
-CXX ?= g++
+CXX ?= clang++
+ERP_VERSION ?= v0.1-dev
 
 # variables
 LIBS += -L$(EINSTEIN_RADIO_INSTALL)/lib
-LIBS += $(shell $(EINSTEIN_RADIO_INSTALL)/bin/gsl-config --libs)
-LIBS += $(shell export PKG_CONFIG_PATH="$(EINSTEIN_RADIO_INSTALL)/lib/pkgconfig" && pkg-config --libs fftw3f)
-LIBS += $(shell $(EINSTEIN_RADIO_INSTALL)/bin/xml2-config --libs)
+LIBS += -lgsl -lgslcblas -lfftw3f -lxml2
 LIBS += -lboinc_api -lboinc
-LIBS += -L/usr/lib
-LIBS += -lpthread
-LIBS += $(EINSTEIN_RADIO_INSTALL)/lib/libz.a
+LIBS += -lpthread -lz
 
 LDFLAGS += -framework Foundation -framework QuartzCore -framework Metal
 
-CXXFLAGS += -I$(EINSTEIN_RADIO_INSTALL)/include/metal-cpp
+CXXFLAGS += -I$(METAL_CPP_DIR)
 CXXFLAGS += -I$(EINSTEIN_RADIO_INSTALL)/include
-CXXFLAGS += $(shell $(EINSTEIN_RADIO_INSTALL)/bin/gsl-config --cflags)
-CXXFLAGS += $(shell export PKG_CONFIG_PATH="$(EINSTEIN_RADIO_INSTALL)/lib/pkgconfig" && pkg-config --cflags fftw3f)
-CXXFLAGS += $(shell $(EINSTEIN_RADIO_INSTALL)/bin/xml2-config --cflags)
 CXXFLAGS += -I$(EINSTEIN_RADIO_INSTALL)/include/boinc
+CXXFLAGS += -I/usr/include/libxml2
 CXXFLAGS += -DHAVE_INLINE -DBOINCIFIED
 CXXFLAGS += -DUSE_METAL
 CXXFLAGS += -std=c++17
-CXXFLAGS += -DVKFFT_BACKEND=5
 
 MTLFLAGS += -std=metal3.0 -fno-fast-math -Werror
 
-DEPS = Makefile
-OBJS = demod_binary.o demod_binary_metal.o demod_binary_hs_cpu.o hs_common.o rngmed.o erp_boinc_ipc.o erp_getopt.o erp_getopt1.o erp_utilities.o
-EINSTEINBINARY_TARGET ?= einsteinbinary_macosx
+DEPS = Makefile.macos.metal
+OBJS = demod_binary.o demod_binary_metal.o demod_binary_hs_metal.o hs_common.o rngmed.o \
+       erp_boinc_ipc.o erp_getopt.o erp_getopt1.o erp_utilities.o
+EINSTEINBINARY_TARGET ?= einsteinbinary_BRP4_macos
 TARGET = $(EINSTEINBINARY_TARGET)
 METALLIB = default.metallib
 
-# primary role based tagets
 default: release
-debug: $(TARGET)
-#profile: clean $(TARGET)
-release: clean $(TARGET)
+debug: erp_git_version.h $(TARGET)
+release: clean erp_git_version.h $(TARGET)
 
-# target specific options
 debug: CXXFLAGS += -DLOGLEVEL=debug -pg -ggdb3 -O0 -Wall
-#profile: CXXFLAGS += -DNDEBUG -DLOGLEVEL=info -ggdb3 -O3 -Wall -fprofile-generate
-#release: CXXFLAGS += -DNDEBUG -DLOGLEVEL=info -ggdb3 -O3 -Wall -fprofile-use
 release: CXXFLAGS += -DNDEBUG -DLOGLEVEL=info -ggdb3 -O3 -Wall
-
-# file based targets
-#profile:
-#	@echo "Removing previous profiling data..."
-#	rm -f *_profile.*
-#	rm -f *.gcda
-#	@echo "Gathering profiling data (this takes roughly one minute)..."
-#	./$(TARGET) -t $(EINSTEIN_RADIO_SRC)/../test/templates_400Hz_2_short.bank -l $(EINSTEIN_RADIO_SRC)/data/zaplist_232.txt -A 0.04 -P 3.0 -W -z -i $(EINSTEIN_RADIO_SRC)/../test/J1907+0740_dm_482.binary -c status_profile.cpt -o resu
-#	@echo "Finished gathering profiling data..."
 
 $(TARGET): $(DEPS) $(EINSTEIN_RADIO_SRC)/erp_boinc_wrapper.cpp $(OBJS)
 	$(CXX) -g $(CXXFLAGS) $(LDFLAGS) $(EINSTEIN_RADIO_SRC)/erp_boinc_wrapper.cpp -o $(TARGET) $(OBJS) $(LIBS)
@@ -84,19 +75,23 @@ $(TARGET): $(DEPS) $(EINSTEIN_RADIO_SRC)/erp_boinc_wrapper.cpp $(OBJS)
 demod_binary.o: $(DEPS) $(EINSTEIN_RADIO_SRC)/demod_binary.c $(EINSTEIN_RADIO_SRC)/demod_binary.h
 	$(CXX) -g $(CXXFLAGS) -c $(EINSTEIN_RADIO_SRC)/demod_binary.c
 
-$(METALLIB).h: $(EINSTEIN_RADIO_SRC)/metal/demod_binary_metal.metal
+# both kernel files are compiled into ONE embedded .metallib -- see
+# demod_binary_metal.cpp / demod_binary_hs_metal.cpp, which both look their
+# kernels up from the same g_metalLibrary
+$(METALLIB).h: $(EINSTEIN_RADIO_SRC)/metal/demod_binary_metal.metal $(EINSTEIN_RADIO_SRC)/metal/harmonic_summing_kernel.metal
 	xcrun metal $(MTLFLAGS) -c $(EINSTEIN_RADIO_SRC)/metal/demod_binary_metal.metal -o demod_binary_metal.ir
-	xcrun metallib demod_binary_metal.ir -o $(METALLIB)
-	xxd -i $(METALLIB) > $(EINSTEIN_RADIO_INSTALL)/include/$(METALLIB).h
+	xcrun metal $(MTLFLAGS) -c $(EINSTEIN_RADIO_SRC)/metal/harmonic_summing_kernel.metal -o harmonic_summing_kernel.ir
+	xcrun metallib demod_binary_metal.ir harmonic_summing_kernel.ir -o $(METALLIB)
+	xxd -i $(METALLIB) > $(METALLIB).h
 
 demod_binary_metal.o: $(DEPS) $(EINSTEIN_RADIO_SRC)/metal/demod_binary_metal.cpp $(EINSTEIN_RADIO_SRC)/metal/demod_binary_metal.h $(METALLIB).h
-	$(CXX) -g $(CXXFLAGS) -c $(EINSTEIN_RADIO_SRC)/metal/demod_binary_metal.cpp
+	$(CXX) -g $(CXXFLAGS) -I. -c $(EINSTEIN_RADIO_SRC)/metal/demod_binary_metal.cpp
+
+demod_binary_hs_metal.o: $(DEPS) $(EINSTEIN_RADIO_SRC)/metal/demod_binary_hs_metal.cpp $(EINSTEIN_RADIO_SRC)/metal/demod_binary_hs_metal.h
+	$(CXX) -g $(CXXFLAGS) -c $(EINSTEIN_RADIO_SRC)/metal/demod_binary_hs_metal.cpp
 
 hs_common.o: $(DEPS) $(EINSTEIN_RADIO_SRC)/hs_common.c $(EINSTEIN_RADIO_SRC)/hs_common.h
 	$(CXX) -g $(CXXFLAGS) -c $(EINSTEIN_RADIO_SRC)/hs_common.c
-
-demod_binary_hs_cpu.o: $(DEPS) $(EINSTEIN_RADIO_SRC)/demod_binary_hs_cpu.c $(EINSTEIN_RADIO_SRC)/demod_binary_hs_cpu.h $(EINSTEIN_RADIO_SRC)/hs_common.h
-	$(CXX) -g $(CXXFLAGS) -c $(EINSTEIN_RADIO_SRC)/demod_binary_hs_cpu.c
 
 rngmed.o: $(DEPS) $(EINSTEIN_RADIO_SRC)/rngmed.c $(EINSTEIN_RADIO_SRC)/rngmed.h
 	$(CXX) -g $(CXXFLAGS) -c $(EINSTEIN_RADIO_SRC)/rngmed.c
@@ -113,9 +108,14 @@ erp_getopt1.o: $(DEPS) $(EINSTEIN_RADIO_SRC)/erp_getopt1.c $(EINSTEIN_RADIO_SRC)
 erp_utilities.o: $(DEPS) $(EINSTEIN_RADIO_SRC)/erp_utilities.cpp $(EINSTEIN_RADIO_SRC)/erp_utilities.h
 	$(CXX) -g $(CXXFLAGS) -c $(EINSTEIN_RADIO_SRC)/erp_utilities.cpp
 
+erp_git_version.h:
+	@echo "#ifndef ERP_GIT_VERSION_H" > $@
+	@echo "#define ERP_GIT_VERSION_H" >> $@
+	@echo "#define ERP_GIT_VERSION \"$(ERP_VERSION)\"" >> $@
+
 install:
 	mkdir -p $(EINSTEIN_RADIO_INSTALL)/../dist
 	cp $(TARGET) $(EINSTEIN_RADIO_INSTALL)/../dist
 
 clean:
-	rm -f $(OBJS) $(TARGET)
+	rm -f $(OBJS) $(TARGET) $(METALLIB) $(METALLIB).h *.ir erp_git_version.h

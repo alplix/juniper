@@ -501,8 +501,11 @@ static int worker(void) {
 int main(int argc, char** argv) {
   int result = 0;
 
+  logMessage(info, false, "This program is published under the GNU General Public License, version 2\n");
+  logMessage(info, false, "For details see https://github.com/alplix/juniper\n\n");
+  logMessage(info, false, "Juniper %s - BRP4 Metal port (BOINC einsteinbinary_BRP4)\n", ERP_GIT_VERSION);
+  logMessage(info, false, "Coded by Alperen Yavuz | github.com/alplix/juniper\n\n");
   logMessage(info, true, "Application startup - thank you for supporting Einstein@Home!\n");
-  logMessage(info, true, "This is the BRP4 CUDA port %s\n", ERP_GIT_VERSION);
   logMessage(info, true, "Built at %s %s. Thank you for crunching with it :)\n",
              __DATE__, __TIME__);
 

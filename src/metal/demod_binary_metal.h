@@ -21,9 +21,11 @@
 #ifndef DEMOD_BINARY_METAL_H
 #define DEMOD_BINARY_METAL_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "../diptr.h"
+#include "../erp_utilities.h"
 #include "../structs.h"
 
 #ifdef __cplusplus
@@ -31,6 +33,12 @@ extern "C" {
 #endif
 
 extern int initialize_metal(int metalDeviceIdGiven, int *metalDeviceId);
+
+// Metal equivalent of the CUDA backend's printDeviceGlobalMemStatus (see
+// cuda_utilities.h/.c in the companion brp4-cuda-port repo) -- logs current
+// GPU memory usage via MTL::Device's currentAllocatedSize()/
+// recommendedMaxWorkingSetSize(), used by demod_binary.c's debug logging.
+extern void printDeviceGlobalMemStatus(const ERP_LOGLEVEL logLevel, const bool followUp);
 
 extern int set_up_resampling(DIfloatPtr input,
                              DIfloatPtr *output,
