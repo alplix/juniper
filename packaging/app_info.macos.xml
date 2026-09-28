@@ -1,0 +1,28 @@
+<app_info>
+    <app>
+        <name>einsteinbinary_BRP4</name>
+        <user_friendly_name>Einstein Binary Radio Pulsar Search (BRP4) - Juniper Metal port</user_friendly_name>
+    </app>
+    <file_info>
+        <name>einsteinbinary_BRP4_macos</name>
+        <executable/>
+    </file_info>
+    <app_version>
+        <app_name>einsteinbinary_BRP4</app_name>
+        <version_num>99</version_num>
+        <platform>arm64-apple-darwin</platform>
+        <plan_class>BRP4AppleGPU</plan_class>
+        <avg_ncpus>0.25</avg_ncpus>
+        <max_ncpus>0.50</max_ncpus>
+        <flops>2600000000000</flops>
+        <gpu_usage>0.50</gpu_usage>
+        <coproc>
+            <type>apple_gpu</type>
+            <count>1</count>
+        </coproc>
+        <file_ref>
+            <file_name>einsteinbinary_BRP4_macos</file_name>
+            <main_program/>
+        </file_ref>
+    </app_version>
+</app_info>
