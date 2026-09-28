@@ -37,8 +37,15 @@ METAL_CPP_DIR?=$(EINSTEIN_RADIO_SRC)/../third_party/metal-cpp
 CXX ?= clang++
 ERP_VERSION ?= v0.1-dev
 
+# Homebrew prefix for GSL/FFTW (not keg-only, headers land directly under
+# HOMEBREW_PREFIX/include) and libxml2 (keg-only on macOS since Apple ships
+# its own older copy, so it needs its own explicit path).
+HOMEBREW_PREFIX ?= /opt/homebrew
+LIBXML2_PREFIX ?= $(HOMEBREW_PREFIX)/opt/libxml2
+
 # variables
 LIBS += -L$(EINSTEIN_RADIO_INSTALL)/lib
+LIBS += -L$(HOMEBREW_PREFIX)/lib -L$(LIBXML2_PREFIX)/lib
 LIBS += -lgsl -lgslcblas -lfftw3f -lxml2
 LIBS += -lboinc_api -lboinc
 LIBS += -lpthread -lz
@@ -49,7 +56,8 @@ LDFLAGS += -framework MetalPerformanceShaders -framework MetalPerformanceShaders
 CXXFLAGS += -I$(METAL_CPP_DIR)
 CXXFLAGS += -I$(EINSTEIN_RADIO_INSTALL)/include
 CXXFLAGS += -I$(EINSTEIN_RADIO_INSTALL)/include/boinc
-CXXFLAGS += -I/usr/include/libxml2
+CXXFLAGS += -I$(HOMEBREW_PREFIX)/include
+CXXFLAGS += -I$(LIBXML2_PREFIX)/include/libxml2
 CXXFLAGS += -DHAVE_INLINE -DBOINCIFIED
 CXXFLAGS += -DUSE_METAL
 CXXFLAGS += -std=c++17
@@ -131,6 +139,7 @@ erp_git_version.h:
 	@echo "#ifndef ERP_GIT_VERSION_H" > $@
 	@echo "#define ERP_GIT_VERSION_H" >> $@
 	@echo "#define ERP_GIT_VERSION \"$(ERP_VERSION)\"" >> $@
+	@echo "#endif" >> $@
 
 install:
 	mkdir -p $(EINSTEIN_RADIO_INSTALL)/../dist
