@@ -99,6 +99,16 @@ MTL::Buffer *timeSeriesLengthBuf = NULL;  // single uint, device-side only (no h
 MTL::Buffer *timeSeriesMeanBuf = NULL;    // single atomic_float, device-side only
 MTL::Buffer *resampledTimeSeriesBuf = NULL;
 
+// resampling's command buffer, encoded but deliberately left uncommitted --
+// run_fft continues encoding FFT + power-spectrum onto this SAME buffer and
+// commits it, so the whole per-template GPU pipeline (resampling through
+// power-spectrum) is one command buffer / one sync point, matching the CUDA
+// port's fully-chained default-stream design instead of the two separate
+// submissions an earlier version of this file used (see the project memory
+// for the perf numbers that motivated this -- ~9.5ms/template before this
+// change, empirically dominated by the extra sync between the two stages).
+MTL::CommandBuffer *pendingCommandBuffer = NULL;
+
 MPSFFTHandle fftHandle = NULL;
 MTL::Buffer *fftScratchBuf = NULL;         // interleaved-complex float32, nsamples/2+1 elements
 MTL::Buffer *powerspectrumOutputBuf = NULL;  // float32, fft_size_padded elements
@@ -323,12 +333,15 @@ int run_resampling(DIfloatPtr input_dip, DIfloatPtr output_dip, const RESAMP_PAR
   }
 
   enc->endEncoding();
-  cmd->commit();
-  cmd->waitUntilCompleted();
-  // single sync point for the whole resampling stage, matching the CUDA
-  // port's "zero host<->device round trips inside run_resampling" design
-  // (its actual sync happens later, at the harmonic-summing stage) -- every
-  // intermediate value above (modulated length, mean) stayed device-side.
+  // deliberately NOT committed here -- run_fft continues encoding onto this
+  // same command buffer (FFT + power-spectrum) and commits/waits once for
+  // the combined pipeline. Every intermediate value above (modulated
+  // length, mean) already stayed device-side, so there was never a reason
+  // for a host round trip in between; the only reason to had split this
+  // into two submissions before was MPSGraph's command-buffer lifetime,
+  // which the FFT bridge now handles by taking this buffer directly
+  // instead of creating its own from the queue.
+  pendingCommandBuffer = cmd;
 
   return 0;
 }
@@ -397,8 +410,9 @@ int run_fft(DIfloatPtr input, DIfloatPtr output, uint32_t nsamples, unsigned int
   const unsigned int fftSizePadded = PADDED_FFT_SIZE(fft_size);
 
   int result = mps_fft_and_powerspectrum_encode(
-      fftHandle, (void *)g_metalQueue, (void *)resampledTimeSeriesBuf, (void *)fftScratchBuf,
+      fftHandle, (void *)pendingCommandBuffer, (void *)resampledTimeSeriesBuf, (void *)fftScratchBuf,
       (void *)pipePowerspectrum, (void *)powerspectrumOutputBuf, norm_factor, fftSizePadded);
+  pendingCommandBuffer = NULL;  // committed by the bridge call above regardless of its result
   if (result != 0) {
     logMessage(error, true, "Metal FFT/power-spectrum command buffer failed (error: %d)\n", result);
     return (RADPUL_METAL_FFT_EXEC);

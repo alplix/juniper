@@ -54,10 +54,14 @@ MPSFFTHandle mps_fft_create(void *mtlDevice, uint32_t nsamples);
 // the power-spectrum kernel (fftScratchBuffer -> powerspectrumOutputBuffer,
 // float32, fftSizePadded elements, using the already-created
 // powerspectrumPipeline and normFactor -- same kernel, same arguments as
-// demod_binary_metal.metal's kernelPowerspectrum) into one command buffer
-// obtained from mtlCommandQueue, commits it, and waits for completion.
-// Returns 0 on success.
-int mps_fft_and_powerspectrum_encode(MPSFFTHandle handle, void *mtlCommandQueue,
+// demod_binary_metal.metal's kernelPowerspectrum) onto mtlCommandBuffer --
+// an MTL::CommandBuffer* the caller already obtained from its command queue
+// and already used to encode the resampling kernels (see
+// demod_binary_metal.cpp's run_resampling/run_fft), left deliberately
+// uncommitted so this call can continue encoding onto it rather than
+// starting a second command buffer / second sync point. Commits it and
+// waits for completion. Returns 0 on success.
+int mps_fft_and_powerspectrum_encode(MPSFFTHandle handle, void *mtlCommandBuffer,
                                      void *inputBuffer, void *fftScratchBuffer,
                                      void *powerspectrumPipeline, void *powerspectrumOutputBuffer,
                                      float normFactor, uint32_t fftSizePadded);

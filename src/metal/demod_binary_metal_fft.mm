@@ -77,14 +77,14 @@ extern "C" MPSFFTHandle mps_fft_create(void *mtlDevice, uint32_t nsamples) {
   }
 }
 
-extern "C" int mps_fft_and_powerspectrum_encode(MPSFFTHandle handle, void *mtlCommandQueue,
+extern "C" int mps_fft_and_powerspectrum_encode(MPSFFTHandle handle, void *mtlCommandBuffer,
                                                 void *inputBuffer, void *fftScratchBuffer,
                                                 void *powerspectrumPipeline,
                                                 void *powerspectrumOutputBuffer, float normFactor,
                                                 uint32_t fftSizePadded) {
   @autoreleasepool {
     FFTPlan *plan = (FFTPlan *)handle;
-    id<MTLCommandQueue> queue = bridge<id<MTLCommandQueue>>(mtlCommandQueue);
+    id<MTLCommandBuffer> rawCmd = bridge<id<MTLCommandBuffer>>(mtlCommandBuffer);
     id<MTLBuffer> inBuf = bridge<id<MTLBuffer>>(inputBuffer);
     id<MTLBuffer> fftBuf = bridge<id<MTLBuffer>>(fftScratchBuffer);
     id<MTLComputePipelineState> psPipeline = bridge<id<MTLComputePipelineState>>(powerspectrumPipeline);
@@ -102,7 +102,12 @@ extern "C" int mps_fft_and_powerspectrum_encode(MPSFFTHandle handle, void *mtlCo
     NSDictionary *feeds = @{plan->inputTensor : inData};
     NSDictionary *results = @{plan->outputTensor : outData};
 
-    id<MTLCommandBuffer> rawCmd = [queue commandBuffer];
+    // rawCmd already has the resampling kernels encoded on it (see
+    // demod_binary_metal.cpp's run_resampling) and was deliberately left
+    // uncommitted for exactly this -- wrapping and continuing here keeps
+    // resampling + FFT + power-spectrum as one command buffer / one sync
+    // point for the whole per-template pipeline, matching the CUDA port's
+    // fully-chained default-stream design.
     MPSCommandBuffer *mpsCmd = [MPSCommandBuffer commandBufferWithCommandBuffer:rawCmd];
 
     [plan->graph encodeToCommandBuffer:mpsCmd
