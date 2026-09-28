@@ -44,14 +44,16 @@ using namespace metal;
 
 // IMPORTANT: `i`/`j`/`jj` below are signed (they go negative at the left
 // spectrum border, see idx_j_offset), while window_2/fundamental_idx_hi/
-// harmonic_idx_hi are unsigned. Comparisons like `i < window_2` therefore
-// promote `i` to unsigned first (standard C/Metal usual-arithmetic-
-// conversion rules) -- a negative `i` becomes a huge unsigned value, which
-// makes that comparison false but the paired `i >= harmonic_idx_hi` true,
-// so the `||` still correctly excludes it. This is exactly how the CUDA
-// source relies on the same conversion; keep the signed/unsigned types as
-// they are (int vs. uint), do not "clean up" with casts, or left-border
-// handling silently breaks.
+// harmonic_idx_hi are unsigned. The CUDA source relies on the implicit
+// int->unsigned promotion in comparisons like `i < window_2`: a negative
+// `i` becomes a huge unsigned value, which makes that comparison false but
+// the paired `i >= harmonic_idx_hi` true, so the `||` still correctly
+// excludes it. Metal's `-Werror -Wsign-compare` (this project's build
+// flags, deliberately kept on) rejects the implicit version, so below the
+// SAME promotion is written as an explicit `(uint)i < window_2` etc. --
+// same bits, same result, just not silent. Do not "clean up" by casting
+// the unsigned side to int instead; that changes the comparison outcome
+// and silently breaks left-border handling.
 
 // main kernel for harmonic summing.
 // Constraint: threadgroup size must be a multiple of 16 (each sub-block of
@@ -76,8 +78,13 @@ kernel void harmonic_summing_kernel(device float *sumspec1 [[buffer(0)]],
                                     const device int *d_h_lut [[buffer(10)]],
                                     const device int *d_k_lut [[buffer(11)]],
                                     uint3 tgid [[threadgroup_position_in_grid]],
-                                    uint tid [[thread_position_in_threadgroup]])
+                                    uint3 tidv [[thread_position_in_threadgroup]])
 {
+  // Metal requires attribute-qualified kernel parameters to share one
+  // dimensionality (both uint3 here) when used together; the CUDA source's
+  // threadIdx.x is 1D, so pull out a scalar right away and use that below.
+  const uint tid = tidv.x;
+
   threadgroup float sspec_cand[4 * HS_BLOCKSIZE];
 
   int idx_j = (int(tgid.y) << 4) + int(tgid.x);
@@ -92,7 +99,7 @@ kernel void harmonic_summing_kernel(device float *sumspec1 [[buffer(0)]],
   int i2, i4, i8;
   int iN;
 
-  if (i < window_2 || i >= harmonic_idx_hi) {
+  if ((uint)i < window_2 || (uint)i >= harmonic_idx_hi) {
     // no candidate contribution from this index
     sspec_cand[tid] = 0.0f;
     sspec_cand[HS_BLOCKSIZE + tid] = 0.0f;
@@ -105,7 +112,7 @@ kernel void harmonic_summing_kernel(device float *sumspec1 [[buffer(0)]],
     i4 = i << 2;
     i8 = i4 + i4;
     iN = i8 + 8;
-    if ((p > FETCH(thrA, 0)) && (i < fundamental_idx_hi)) {
+    if ((p > FETCH(thrA, 0)) && ((uint)i < fundamental_idx_hi)) {
       dirty[(i >> LOG_PS_PAGE_SIZE)] = 1;
     }
 
@@ -176,7 +183,7 @@ kernel void harmonic_summing_kernel(device float *sumspec1 [[buffer(0)]],
     jj = (idx_j_offset + k + 8 + lend2);
     j = (jj >= 0) ? (jj >> h) : -1;
 
-    if ((sum > FETCH(thrA, h)) && j >= 0 && (j < fundamental_idx_hi)) {
+    if ((sum > FETCH(thrA, h)) && j >= 0 && ((uint)j < fundamental_idx_hi)) {
       // CUDA indexes sumspec[h-1][j] through a pointer array built in shared
       // memory; MSL has no clean device-address-space pointer array here,
       // so this is the one deliberate structural difference from the CUDA
@@ -214,8 +221,10 @@ kernel void harmonic_summing_kernel_gaps(device float *sumspec1 [[buffer(0)]],
                                          const device int *d_h_lut [[buffer(10)]],
                                          const device int *d_k_lut [[buffer(11)]],
                                          uint3 tgid [[threadgroup_position_in_grid]],
-                                         uint tid [[thread_position_in_threadgroup]])
+                                         uint3 tidv [[thread_position_in_threadgroup]])
 {
+  const uint tid = tidv.x;
+
   threadgroup float sspec_cand[2 * HS_BLOCKSIZE];
 
   int idx_j = (int(tgid.y) << 4) + int(tgid.x);
@@ -236,7 +245,7 @@ kernel void harmonic_summing_kernel_gaps(device float *sumspec1 [[buffer(0)]],
   // for this kernel there can be overlap with the left spectrum border
   // (index 0), but i can still be lower than window_2 or higher than
   // harmonic_idx_hi -- same signed/unsigned reliance noted above.
-  if (i < window_2 || i >= harmonic_idx_hi) {
+  if ((uint)i < window_2 || (uint)i >= harmonic_idx_hi) {
     sspec_cand[idx_i_offset] = 0.0f;
     sspec_cand[HS_BLOCKSIZE / 2 + idx_i_offset] = 0.0f;
     sspec_cand[2 * (HS_BLOCKSIZE / 2) + idx_i_offset] = 0.0f;
@@ -248,7 +257,7 @@ kernel void harmonic_summing_kernel_gaps(device float *sumspec1 [[buffer(0)]],
     i4 = i << 2;
     i8 = i4 + i4;
     iN = i8 + 8;
-    if ((p > FETCH(thrA, 0)) && (i < fundamental_idx_hi)) {
+    if ((p > FETCH(thrA, 0)) && ((uint)i < fundamental_idx_hi)) {
       dirty[(i >> LOG_PS_PAGE_SIZE)] = 1;
     }
     p += FETCH(powerspectrum, iN >> 4);
@@ -321,7 +330,7 @@ kernel void harmonic_summing_kernel_gaps(device float *sumspec1 [[buffer(0)]],
     // j is provably >= 0 here (idx_j_offset, k, the shift term, 4 and
     // lend2 are all >= 0 for this kernel's index ranges), unlike the main
     // kernel there's no explicit j >= 0 guard in the CUDA source either.
-    if ((sum > FETCH(thrA, h)) && (j < fundamental_idx_hi)) {
+    if ((sum > FETCH(thrA, h)) && ((uint)j < fundamental_idx_hi)) {
       switch (h - 1) {
         case 0: sumspec1[j] = sum; break;
         case 1: sumspec2[j] = sum; break;

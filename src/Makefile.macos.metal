@@ -44,6 +44,7 @@ LIBS += -lboinc_api -lboinc
 LIBS += -lpthread -lz
 
 LDFLAGS += -framework Foundation -framework QuartzCore -framework Metal
+LDFLAGS += -framework MetalPerformanceShaders -framework MetalPerformanceShadersGraph
 
 CXXFLAGS += -I$(METAL_CPP_DIR)
 CXXFLAGS += -I$(EINSTEIN_RADIO_INSTALL)/include
@@ -56,7 +57,7 @@ CXXFLAGS += -std=c++17
 MTLFLAGS += -std=metal3.0 -fno-fast-math -Werror
 
 DEPS = Makefile.macos.metal
-OBJS = demod_binary.o demod_binary_metal.o demod_binary_hs_metal.o hs_common.o rngmed.o \
+OBJS = demod_binary.o demod_binary_metal.o demod_binary_metal_fft.o demod_binary_hs_metal.o hs_common.o rngmed.o \
        erp_boinc_ipc.o erp_getopt.o erp_getopt1.o erp_utilities.o
 EINSTEINBINARY_TARGET ?= einsteinbinary_BRP4_macos
 TARGET = $(EINSTEINBINARY_TARGET)
@@ -84,11 +85,29 @@ $(METALLIB).h: $(EINSTEIN_RADIO_SRC)/metal/demod_binary_metal.metal $(EINSTEIN_R
 	xcrun metallib demod_binary_metal.ir harmonic_summing_kernel.ir -o $(METALLIB)
 	xxd -i $(METALLIB) > $(METALLIB).h
 
-demod_binary_metal.o: $(DEPS) $(EINSTEIN_RADIO_SRC)/metal/demod_binary_metal.cpp $(EINSTEIN_RADIO_SRC)/metal/demod_binary_metal.h $(METALLIB).h
-	$(CXX) -g $(CXXFLAGS) -I. -c $(EINSTEIN_RADIO_SRC)/metal/demod_binary_metal.cpp
+# -x objective-c++: metal-cpp's <Foundation/Foundation.hpp>-style includes
+# only resolve to metal-cpp's own headers (instead of the real Foundation
+# framework's identically-shaped path triggering Clang's Darwin framework
+# header lookup and shadowing them) when compiled in Objective-C++ mode --
+# confirmed empirically on real hardware; plain C++ mode picks the wrong
+# header with the same -I flags. Harmless for these files: no Objective-C
+# syntax is used, this only changes header search behavior.
+demod_binary_metal.o: $(DEPS) $(EINSTEIN_RADIO_SRC)/metal/demod_binary_metal.cpp $(EINSTEIN_RADIO_SRC)/metal/demod_binary_metal.h $(EINSTEIN_RADIO_SRC)/metal/demod_binary_metal_fft.h $(METALLIB).h
+	$(CXX) -g $(CXXFLAGS) -x objective-c++ -I. -c $(EINSTEIN_RADIO_SRC)/metal/demod_binary_metal.cpp
 
+# Objective-C++: bridges MPSGraph (Objective-C only, no metal-cpp bindings)
+# to the plain-C++ rest of the backend -- see demod_binary_metal_fft.h.
+demod_binary_metal_fft.o: $(DEPS) $(EINSTEIN_RADIO_SRC)/metal/demod_binary_metal_fft.mm $(EINSTEIN_RADIO_SRC)/metal/demod_binary_metal_fft.h
+	$(CXX) -g $(CXXFLAGS) -fobjc-arc -x objective-c++ -c $(EINSTEIN_RADIO_SRC)/metal/demod_binary_metal_fft.mm -o demod_binary_metal_fft.o
+
+# -x objective-c++ -I.: see the comment on the demod_binary_metal.o rule
+# above -- empirically, -I. must be present alongside -x objective-c++ for
+# the metal-cpp Foundation/Metal/QuartzCore headers to resolve correctly
+# here too (confirmed on real hardware; dropping either one regresses to
+# the same wrong-header error), even though this file has no
+# default.metallib.h dependency of its own.
 demod_binary_hs_metal.o: $(DEPS) $(EINSTEIN_RADIO_SRC)/metal/demod_binary_hs_metal.cpp $(EINSTEIN_RADIO_SRC)/metal/demod_binary_hs_metal.h
-	$(CXX) -g $(CXXFLAGS) -c $(EINSTEIN_RADIO_SRC)/metal/demod_binary_hs_metal.cpp
+	$(CXX) -g $(CXXFLAGS) -x objective-c++ -I. -c $(EINSTEIN_RADIO_SRC)/metal/demod_binary_hs_metal.cpp
 
 hs_common.o: $(DEPS) $(EINSTEIN_RADIO_SRC)/hs_common.c $(EINSTEIN_RADIO_SRC)/hs_common.h
 	$(CXX) -g $(CXXFLAGS) -c $(EINSTEIN_RADIO_SRC)/hs_common.c

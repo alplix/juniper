@@ -12,12 +12,11 @@
  *   searched for pulsed, periodic signals by harmonic summing (see        *
  *   demod_binary_hs_metal.cpp).                                           *
  *                                                                         *
- *   FFT status: PENDING. The companion project plan gates the FFT step    *
- *   behind a standalone MPSGraph feasibility smoke test that needs a Mac  *
- *   with full Xcode installed (not yet available at the time this file    *
- *   was written) -- set_up_fft/run_fft/tear_down_fft below are stubs      *
- *   that fail loudly rather than assert an unverified API shape. See the  *
- *   project plan's Phase 1 for what to confirm before filling these in.   *
+ *   FFT: real-to-Hermitean via MPSGraph, bridged through                  *
+ *   demod_binary_metal_fft.mm (plain C++ here can't call the Objective-C  *
+ *   MPSGraph API directly). Verified against the project plan's Phase 1   *
+ *   feasibility gate on a real M1 before being wired in here -- see that  *
+ *   file's header comment for what was confirmed and how.                 *
  *                                                                         *
  *   Einstein@Home is free software: you can redistribute it and/or modify *
  *   it under the terms of the GNU General Public License as published     *
@@ -57,7 +56,16 @@
 
 #include "../demod_binary.h"
 #include "../erp_utilities.h"
+#include "demod_binary_metal_fft.h"
 #include "demod_binary_metal_shared.h"
+
+// matches the CUDA port's CUDA_FFT_BLOCKDIM_X (demod_binary_cuda.cuh) --
+// kept the same value so the power-spectrum kernel's grid granularity (and
+// therefore fft_size_padded, and the CPU-side toplist indexing that assumes
+// it) stays identical between backends.
+#define METAL_FFT_BLOCKDIM_X 256
+#define PADDED_FFT_SIZE(fftsize) \
+  (METAL_FFT_BLOCKDIM_X * ((unsigned int)(fftsize) + METAL_FFT_BLOCKDIM_X - 1) / METAL_FFT_BLOCKDIM_X)
 
 // definitions for the shared globals declared in demod_binary_metal_shared.h
 // -- this is the ONE translation unit in the program that defines the
@@ -90,6 +98,10 @@ MTL::Buffer *modTimeOffsetsBuf = NULL;
 MTL::Buffer *timeSeriesLengthBuf = NULL;  // single uint, device-side only (no host round trip)
 MTL::Buffer *timeSeriesMeanBuf = NULL;    // single atomic_float, device-side only
 MTL::Buffer *resampledTimeSeriesBuf = NULL;
+
+MPSFFTHandle fftHandle = NULL;
+MTL::Buffer *fftScratchBuf = NULL;         // interleaved-complex float32, nsamples/2+1 elements
+MTL::Buffer *powerspectrumOutputBuf = NULL;  // float32, fft_size_padded elements
 
 unsigned int gNsamplesUnpadded = 0;
 unsigned int gNsamples = 0;
@@ -343,36 +355,72 @@ int tear_down_resampling(DIfloatPtr output_dip) {
   return 0;
 }
 
-// ---------------------------------------------------------------------
-// FFT: PENDING. See the file header and the project plan's Phase 1.
-// These stubs keep the build linkable so the resampling stage above can
-// be built and tested in isolation before FFT lands.
-// ---------------------------------------------------------------------
-
 int set_up_fft(DIfloatPtr input_dip, DIfloatPtr *output_dip, uint32_t nsamples, unsigned int fft_size) {
-  (void)input_dip;
-  (void)output_dip;
-  (void)nsamples;
-  (void)fft_size;
-  logMessage(error, true,
-             "Metal FFT not yet implemented (pending Phase 1 MPSGraph feasibility check -- "
-             "needs a Mac with full Xcode installed). See the project plan.\n");
-  return (RADPUL_METAL_FFT_PLAN);
+  (void)input_dip;  // FFT input is resampledTimeSeriesBuf, already known to this TU
+
+  NS::Error *nsError = NULL;
+  pipePowerspectrum = g_metalDevice->newComputePipelineState(fnPowerspectrum, &nsError);
+  if (!pipePowerspectrum) {
+    logMessage(error, true, "Couldn't create power-spectrum compute pipeline!\n");
+    return (RADPUL_METAL_PIPELINE_CREATE);
+  }
+
+  fftHandle = mps_fft_create((void *)g_metalDevice, nsamples);
+  if (!fftHandle) {
+    logMessage(error, true, "Couldn't build MPSGraph FFT plan!\n");
+    return (RADPUL_METAL_FFT_PLAN);
+  }
+
+  const unsigned int halfBins = nsamples / 2 + 1;
+  fftScratchBuf =
+      g_metalDevice->newBuffer(sizeof(float) * 2 * halfBins, MTL::ResourceStorageModePrivate);
+
+  const unsigned int fftSizePadded = PADDED_FFT_SIZE(fft_size);
+  powerspectrumOutputBuf =
+      g_metalDevice->newBuffer(sizeof(float) * fftSizePadded, MTL::ResourceStorageModeShared);
+
+  if (!fftScratchBuf || !powerspectrumOutputBuf) {
+    logMessage(error, true, "Error allocating FFT/power-spectrum device memory!\n");
+    return (RADPUL_METAL_MEM_ALLOC_DEVICE);
+  }
+
+  output_dip->device_ptr = (void *)powerspectrumOutputBuf;
+
+  return 0;
 }
 
 int run_fft(DIfloatPtr input, DIfloatPtr output, uint32_t nsamples, unsigned int fft_size,
            float norm_factor) {
-  (void)input;
-  (void)output;
-  (void)nsamples;
-  (void)fft_size;
-  (void)norm_factor;
-  logMessage(error, true, "Metal FFT not yet implemented (pending Phase 1).\n");
-  return (RADPUL_METAL_FFT_EXEC);
+  (void)nsamples;  // fixed by the plan built in set_up_fft
+  (void)output;    // == powerspectrumOutputBuf, already known to this TU
+
+  const unsigned int fftSizePadded = PADDED_FFT_SIZE(fft_size);
+
+  int result = mps_fft_and_powerspectrum_encode(
+      fftHandle, (void *)g_metalQueue, (void *)resampledTimeSeriesBuf, (void *)fftScratchBuf,
+      (void *)pipePowerspectrum, (void *)powerspectrumOutputBuf, norm_factor, fftSizePadded);
+  if (result != 0) {
+    logMessage(error, true, "Metal FFT/power-spectrum command buffer failed (error: %d)\n", result);
+    return (RADPUL_METAL_FFT_EXEC);
+  }
+
+  // DC bin zeroed, matching kernelPowerspectrum's own (index==0) special case being redundant
+  // here is fine -- the kernel already does it; nothing further needed on the host side.
+
+  return 0;
 }
 
 int tear_down_fft(DIfloatPtr output_dip) {
   (void)output_dip;
+
+  if (fftHandle) mps_fft_destroy(fftHandle);
+  fftHandle = NULL;
+  if (fftScratchBuf) fftScratchBuf->release();
+  if (powerspectrumOutputBuf) powerspectrumOutputBuf->release();
+  fftScratchBuf = powerspectrumOutputBuf = NULL;
+  if (pipePowerspectrum) pipePowerspectrum->release();
+  pipePowerspectrum = NULL;
+
   return 0;
 }
 
