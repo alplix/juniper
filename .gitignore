@@ -1,0 +1,17 @@
+# Build artifacts
+*.o
+*.ir
+*.metallib
+*.metallib.h
+einsteinbinary_BRP4*
+src/erp_git_version.h
+
+# Test scratch
+test/out/
+*.results.dat
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
